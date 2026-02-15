@@ -1,167 +1,161 @@
 #!/bin/bash
+# Zivpn UDP Management Panel - CIAN Edition
+# ASCII Style: ZIVPN Thick Lean Left
 
-# ========= WARNA =========
-G='\033[0;32m'
-R='\033[0;31m'
-Y='\033[0;33m'
-B='\033[0;34m'
-N='\033[0m'
+# Warna
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
+NC='\033[0m' 
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+BOLD='\033[1m'
 
-# ========= ROOT CHECK =========
-[[ $EUID -ne 0 ]] && echo -e "${R}Jalankan sebagai root${N}" && exit 1
-
-# ========= VAR =========
-IP=$(curl -s https://ipv4.icanhazip.com)
-PORT=36712
-DOMAIN_FILE="/etc/zivpn-domain.conf"
-
-# ========= LOAD DOMAIN =========
-if [[ -f $DOMAIN_FILE ]]; then
-  DOMAIN=$(cat $DOMAIN_FILE)
-else
-  DOMAIN=""
-fi
-
-# HOST yang dipakai user (domain > ip)
-HOST=${DOMAIN:-$IP}
-
-# ========= INSTALL ZIVPN =========
-if [[ ! -f /usr/bin/zivpn ]]; then
-  wget -q -O /usr/bin/zivpn https://raw.githubusercontent.com/Zidni_Dev/zivpn-binary/main/zivpn-linux-amd64
-  chmod +x /usr/bin/zivpn
-
-cat >/etc/zivpn.json <<EOF
-{
-  "listen": ":$PORT",
-  "password": "zivpn",
-  "slowdns": "8.8.8.8"
+# Fungsi Banner ZIVPN Miring Ke Kiri (Garis Tebal & Patah-Patah)
+function banner() {
+    clear
+    echo -e "${PURPLE}${BOLD}"
+    echo "  ________  ___  ___  ___  ________  ________      "
+    echo " /_  ___/|/__/|/__/|/__/|/_______/|/_______/|     "
+    echo " \/_  |_|/|__|/|__|/|__|/|  ______|/|  ___  |_|     "
+    echo "   /  / / /  / / \  \  / /|  |____  |  |/|  | /     "
+    echo "  /  /_/_/  /_/_  \  \/ / |  |____|/|  | |  |/      "
+    echo " /______/|______/| \___/  |_______/||__| |__|       "
+    echo " |______|/|______|/ \__/  |_______|/|__| |__|       "
+    echo -e "          ${CYAN}C I A N   M O D   P A N E L${NC}"
+    echo -e "${PURPLE}======================================================${NC}"
 }
-EOF
 
-cat >/etc/systemd/system/zivpn.service <<EOF
+# Fungsi Install (Logic Zahid Islam)
+function install_zivpn() {
+    banner
+    echo -e "${CYAN}Sedang Menginstall Zivpn UDP Service...${NC}"
+    sudo apt-get update && sudo apt-get upgrade -y
+    sudo apt-get install -y jq curl wget ufw
+    
+    systemctl stop zivpn.service 1> /dev/null 2> /dev/null
+    wget -q https://github.com/zahidbd2/udp-zivpn/releases/download/udp-zivpn_1.4.9/udp-zivpn-linux-amd64 -O /usr/local/bin/zivpn
+    chmod +x /usr/local/bin/zivpn
+    mkdir -p /etc/zivpn
+    
+    if [ ! -f /etc/zivpn/config.json ]; then
+        wget -q https://raw.githubusercontent.com/zahidbd2/udp-zivpn/main/config.json -O /etc/zivpn/config.json
+    fi
+
+    openssl req -new -newkey rsa:4096 -days 365 -nodes -x509 -subj "/C=ID/ST=CIAN/L=CIAN/O=ZIVPN/OU=IT/CN=zivpn" -keyout "/etc/zivpn/zivpn.key" -out "/etc/zivpn/zivpn.crt"
+    
+    cat <<EOF > /etc/systemd/system/zivpn.service
 [Unit]
-Description=ZiVPN UDP Potato
+Description=zivpn VPN Server
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/zivpn -config /etc/zivpn.json
+Type=simple
+User=root
+WorkingDirectory=/etc/zivpn
+ExecStart=/usr/local/bin/zivpn server -c /etc/zivpn/config.json
 Restart=always
-RestartSec=2
+RestartSec=3
+Environment=ZIVPN_LOG_LEVEL=info
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE CAP_NET_RAW
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  systemctl enable zivpn
-  systemctl start zivpn
-fi
-
-# ========= LIST AKUN AKTIF =========
-list_active() {
-echo -e "${Y}┌────────── AKUN AKTIF ──────────┐${N}"
-for u in $(awk -F: '$3 >= 1000 {print $1}' /etc/passwd); do
-  exp=$(chage -l $u 2>/dev/null | grep "Account expires" | cut -d: -f2)
-  [[ "$exp" != " never" && "$exp" != "" ]] && \
-  echo -e "${Y}│${G} $u | Exp:$exp${Y} │${N}"
-done
-echo -e "${Y}└────────────────────────────────┘${N}"
+    sysctl -w net.core.rmem_max=16777216 1> /dev/null 2> /dev/null
+    sysctl -w net.core.wmem_max=16777216 1> /dev/null 2> /dev/null
+    interface=$(ip -4 route ls|grep default|grep -Po '(?<=dev )(\S+)'|head -1)
+    iptables -t nat -A PREROUTING -i $interface -p udp --dport 6000:19999 -j DNAT --to-destination :5667
+    ufw allow 6000:19999/udp
+    ufw allow 5667/udp
+    
+    systemctl daemon-reload
+    systemctl enable zivpn.service
+    systemctl start zivpn.service
+    echo -e "${GREEN}Zivpn UDP Berhasil Terpasang!${NC}"
+    read -p "Tekan Enter untuk kembali..."
 }
 
-# ========= MENU =========
+# Fungsi Create Akun
+function create_akun() {
+    banner
+    echo -e "${CYAN}--- TAMBAH PASSWORD BARU ---${NC}"
+    read -p "Masukkan Password Baru: " username
+    if [[ -z "$username" ]]; then echo -e "${RED}Input kosong!${NC}"; sleep 2; return; fi
+
+    tmp=$(mktemp)
+    jq ".config += [\"$username\"]" /etc/zivpn/config.json > "$tmp" && mv "$tmp" /etc/zivpn/config.json
+    
+    systemctl restart zivpn.service
+    
+    IP=$(curl -s ifconfig.me)
+    echo -e "\n${GREEN}AKUN BERHASIL AKTIF!${NC}"
+    echo -e "${PURPLE}-------------------------------------------${NC}"
+    echo -e "Host/IP  : ${YELLOW}$IP${NC}"
+    echo -e "Password : ${YELLOW}$username${NC}"
+    echo -e "Port UDP : ${YELLOW}6000-19999${NC}"
+    echo -e "Protocol : ${YELLOW}ZIVPN UDP${NC}"
+    echo -e "${PURPLE}-------------------------------------------${NC}"
+    read -p "Tekan Enter untuk kembali ke menu..."
+}
+
+# Fungsi Delete Akun
+function delete_akun() {
+    banner
+    echo -e "${RED}--- HAPUS AKUN ---${NC}"
+    users=$(jq -r '.config[]' /etc/zivpn/config.json)
+    echo -e "Daftar User Aktif:"
+    echo "$users" | nl
+    echo ""
+    read -p "Ketik Password yang ingin dihapus: " userhapus
+    
+    check=$(jq -r ".config[] | select(. == \"$userhapus\")" /etc/zivpn/config.json)
+    if [ -z "$check" ]; then
+        echo -e "${RED}Password [$userhapus] tidak ditemukan!${NC}"
+    else
+        tmp=$(mktemp)
+        jq "del(.config[] | select(. == \"$userhapus\"))" /etc/zivpn/config.json > "$tmp" && mv "$tmp" /etc/zivpn/config.json
+        systemctl restart zivpn.service
+        echo -e "\n${GREEN}SUKSES:${NC} Akun dengan password ${YELLOW}[$userhapus]${NC} telah dihapus."
+    fi
+    read -p "Tekan Enter untuk kembali..."
+}
+
+# Fungsi Info VPS & Change Domain (Placeholder)
+function info_vps() {
+    banner
+    echo -e "${CYAN}--- SYSTEM INFO ---${NC}"
+    echo -e "Uptime      : $(uptime -p)"
+    echo -e "RAM Usage   : $(free -h | grep Mem | awk '{print $3 "/" $2}')"
+    echo -e "Public IP   : $(curl -s ifconfig.me)"
+    echo -e "UDP Status  : $(systemctl is-active zivpn.service)"
+    echo -e "${PURPLE}-------------------------------------------${NC}"
+    read -p "Tekan Enter untuk kembali..."
+}
+
+# Main Menu
 while true; do
-clear
-
-# ===== LOGO =====
-echo -e "${Y}┌──────────────────────────────────────────────┐${N}"
-echo -e "${Y}│${R}   ██████╗  ██████╗ ██╗  ██╗${Y}           │${N}"
-echo -e "${Y}│${R}  ██╔═══██╗██╔════╝ ██║  ██║${Y}           │${N}"
-echo -e "${Y}│${R}  ██║   ██║██║  ███╗███████║${Y}           │${N}"
-echo -e "${Y}│${R}  ██║   ██║██║   ██║██╔══██║${Y}           │${N}"
-echo -e "${Y}│${R}  ╚██████╔╝╚██████╔╝██║  ██║${Y}           │${N}"
-echo -e "${Y}│${R}   ╚═════╝  ╚═════╝ ╚═╝  ╚═╝${Y}           │${N}"
-echo -e "${Y}│${G}        O G H   Z I V P N${Y}               │${N}"
-echo -e "${Y}└──────────────────────────────────────────────┘${N}"
-echo ""
-
-# ===== VPS SPEC =====
-echo -e "${Y}┌──────────── VPS SPEC ────────────┐${N}"
-echo -e "${Y}│${B} HOST   ${Y}: ${G}$HOST${Y}               │${N}"
-echo -e "${Y}│${B} PORT   ${Y}: ${G}$PORT${Y}                 │${N}"
-echo -e "${Y}│${B} STATUS ${Y}: ${G}ZiVPN ACTIVE${Y}        │${N}"
-echo -e "${Y}└──────────────────────────────────┘${N}"
-echo ""
-
-# ===== MENU =====
-echo -e "${Y}┌──────────────── MENU ────────────────┐${N}"
-echo -e "${Y}│${G} 1 ${Y}│${N} Buat Akun Premium              ${Y}│${N}"
-echo -e "${Y}│${G} 2 ${Y}│${N} Buat Akun Trial (1 Hari)       ${Y}│${N}"
-echo -e "${Y}│${G} 3 ${Y}│${N} Hapus Akun                     ${Y}│${N}"
-echo -e "${Y}│${G} 4 ${Y}│${N} Lihat Akun Aktif               ${Y}│${N}"
-echo -e "${Y}│${G} 5 ${Y}│${N} Ganti / Set Domain             ${Y}│${N}"
-echo -e "${Y}│${G} 6 ${Y}│${N} Restart ZiVPN                  ${Y}│${N}"
-echo -e "${Y}│${G} 0 ${Y}│${N} Keluar                         ${Y}│${N}"
-echo -e "${Y}└─────────────────────────────────────┘${N}"
-echo ""
-read -p " Pilih menu : " x
-
-case $x in
-1)
-  read -p "Username : " u
-  read -p "Password : " p
-  read -p "Expired (hari): " e
-  useradd -e $(date -d "$e days" +%Y-%m-%d) -s /bin/false $u
-  echo "$u:$p" | chpasswd
-  clear
-  echo -e "${G}┌──────── AKUN BERHASIL DIBUAT ────────┐${N}"
-  echo -e "${G}│ HOST   : $HOST${N}"
-  echo -e "${G}│ PORT   : $PORT${N}"
-  echo -e "${G}│ USER   : $u${N}"
-  echo -e "${G}│ PASS   : $p${N}"
-  echo -e "${G}│ CONFIG : $HOST:$PORT@$u:$p${N}"
-  echo -e "${G}└─────────────────────────────────────┘${N}"
-  read -p " ENTER..."
-  ;;
-2)
-  u=trial$(date +%s | cut -c8-)
-  p=1234
-  useradd -e $(date -d "1 day" +%Y-%m-%d) -s /bin/false $u
-  echo "$u:$p" | chpasswd
-  clear
-  echo -e "${G}┌──────── TRIAL AKTIF 1 HARI ──────────┐${N}"
-  echo -e "${G}│ HOST : $HOST${N}"
-  echo -e "${G}│ PORT : $PORT${N}"
-  echo -e "${G}│ USER : $u${N}"
-  echo -e "${G}│ PASS : $p${N}"
-  echo -e "${G}│ CFG  : $HOST:$PORT@$u:$p${N}"
-  echo -e "${G}└─────────────────────────────────────┘${N}"
-  read -p " ENTER..."
-  ;;
-3)
-  list_active
-  echo ""
-  read -p "Username yang mau dihapus: " u
-  read -p "Yakin hapus [$u]? [y/n]: " c
-  [[ $c == y ]] && userdel $u && echo -e "${G}Akun $u dihapus${N}"
-  sleep 2
-  ;;
-4)
-  list_active
-  read -p " ENTER..."
-  ;;
-5)
-  read -p "Masukkan domain (kosongkan untuk IP): " d
-  echo "$d" > $DOMAIN_FILE
-  DOMAIN="$d"
-  HOST=${DOMAIN:-$IP}
-  echo -e "${G}Domain diset: ${HOST}${N}"
-  sleep 2
-  ;;
-6)
-  systemctl restart zivpn
-  echo -e "${G}ZiVPN direstart${N}"
-  sleep 2
-  ;;
-0) exit ;;
-esac
+    banner
+    echo -e " [1] Install Zivpn UDP Server"
+    echo -e " [2] Create Akun / Password"
+    echo -e " [3] Delete Akun / Password"
+    echo -e " [4] List User Aktif"
+    echo -e " [5] Info Status VPS"
+    echo -e " [6] Speedtest Server"
+    echo -e " [0] Exit"
+    echo -e "${PURPLE}======================================================${NC}"
+    read -p " Pilih Menu :  " menu
+    
+    case $menu in
+        1) install_zivpn ;;
+        2) create_akun ;;
+        3) delete_akun ;;
+        4) banner; echo -e "${CYAN}USER AKTIF:${NC}"; jq -r '.config[]' /etc/zivpn/config.json | nl; echo ""; read -p "Enter..." ;;
+        5) info_vps ;;
+        6) banner; speedtest-cli --simple 2>/dev/null || (apt install speedtest-cli -y && speedtest-cli --simple); read -p "Enter..." ;;
+        0) exit 0 ;;
+        *) echo -e "${RED}Pilihan salah!${NC}"; sleep 1 ;;
+    esac
 done
